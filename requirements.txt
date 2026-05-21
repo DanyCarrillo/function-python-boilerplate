@@ -1,0 +1,11 @@
+azure-functions>=1.21.0
+azure-storage-blob>=12.19.0
+azure-cosmos>=4.7.0
+azure-search-documents>=11.4.0
+openai>=1.0.0
+azure-ai-documentintelligence>=1.0.0b4
+azure-ai-inference>=1.0.0b7
+azure-communication-email>=1.0.0
+azure-communication-sms>=1.0.1
+msal>=1.28.0
+requests>=2.31.0
