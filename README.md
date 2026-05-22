@@ -96,7 +96,11 @@ function-python-boilerplate/
 ├── requirements-dev.txt         # Dependencias de desarrollo y testing
 ├── pytest.ini                   # Configuración de pytest y cobertura
 ├── setup.cfg                    # Configuración de flake8 (linting PEP8)
-├── .gitlab-ci.yml               # Pipeline CI/CD: lint → test → deploy
+├── ruff.toml                    # Configuración de ruff (linting rápido)
+├── .github/
+│   └── workflows/
+│       ├── ci.yml               # Pipeline CI: lint → security → tests
+│       └── cd.yml               # Pipeline CD: build → deploy por ambiente
 └── src/
     ├── domain/                  # Capa de dominio
     ├── ports/                   # Puertos (contratos abstractos)
@@ -228,13 +232,134 @@ Es la **puerta de entrada HTTP** de Azure Functions. Su única responsabilidad e
 
 ## Pipeline CI/CD
 
-El archivo `.gitlab-ci.yml` define tres etapas:
+El proyecto usa **GitHub Actions** con dos pipelines independientes: `ci.yml` para validación continua y `cd.yml` para despliegue por ambiente.
 
-| Etapa | Descripción |
+### Estrategia de ramas
+
+| Rama | Ambiente | Aprobación manual |
+|---|---|---|
+| `develop` | Dev | No |
+| `staging` | Staging | Sí |
+| `main` | Production | Sí |
+
+---
+
+### Pipeline CI (`ci.yml`)
+
+Se ejecuta en **pull requests** y en **pushes a ramas de feature** (cualquier rama que no sea `main`, `staging` ni `develop`). Sirve como gate de calidad antes de hacer merge.
+
+```
+push / PR
+    ├── lint       (paralelo)
+    ├── security   (paralelo)
+    └── test       (paralelo)
+```
+
+#### Job: `lint`
+
+Ejecuta [`ruff`](https://docs.astral.sh/ruff/) sobre todo el código fuente.
+
+- **Qué verifica:** estilo PEP8, imports no usados, variables sin referenciar, y otras reglas de calidad configuradas en `ruff.toml` (line-length 120).
+- **Falla si:** hay alguna violación de estilo. La salida se formatea con anotaciones nativas de GitHub para que aparezcan en línea en el PR.
+
+#### Job: `security`
+
+Ejecuta dos herramientas en secuencia:
+
+1. **`bandit`** — análisis estático de seguridad del código Python. Detecta patrones inseguros como uso de `eval`, `subprocess` sin sanitizar, hardcoded passwords, etc. Solo reporta severidad media-alta (`-ll`).
+2. **`pip-audit`** — audita las dependencias de `requirements.txt` contra la base de datos de vulnerabilidades de PyPI (OSV). Falla si alguna dependencia tiene un CVE conocido.
+
+#### Job: `test`
+
+Ejecuta la suite completa de pruebas unitarias con `pytest`.
+
+- Instala dependencias de producción y desarrollo.
+- Genera tres reportes de cobertura: consola, `coverage.xml` (para integraciones) y `htmlcov/` (navegable).
+- **Falla si:** algún test no pasa o la cobertura cae por debajo del **80%** (configurado en `pytest.ini`).
+- Sube los reportes como artefactos de GitHub Actions (disponibles 1 día para descarga).
+
+---
+
+### Pipeline CD (`cd.yml`)
+
+Se ejecuta solo en **push a `develop`, `staging` o `main`**. Primero repite los jobs de CI como gate y luego construye y despliega.
+
+```
+push a develop / staging / main
+    ├── lint     ─┐
+    ├── security  ├─ (paralelo, mismas validaciones que CI)
+    ├── test     ─┘
+    │
+    └── build (solo si los 3 anteriores pasan)
+         │
+         ├── deploy-dev      (solo si rama = develop)
+         ├── deploy-staging  (solo si rama = staging,  con aprobación)
+         └── deploy-prod     (solo si rama = main,     con aprobación)
+```
+
+#### Job: `build`
+
+Prepara el artefacto de despliegue que luego comparten los tres jobs de deploy.
+
+1. Instala las dependencias de producción en `.python_packages/lib/site-packages/` — el directorio que Azure Functions espera para encontrar los paquetes sin ejecutar `pip install` en el servidor.
+2. Empaqueta el código fuente excluyendo carpetas innecesarias (`.venv`, `.git`, `htmlcov`, `tests`, `__pycache__`).
+3. Sube el artefacto comprimido a GitHub Actions (`function-app`) con retención de 1 día.
+
+#### Jobs: `deploy-dev` / `deploy-staging` / `deploy-prod`
+
+Los tres jobs siguen el mismo proceso; solo difieren en el ambiente de GitHub que referencian:
+
+1. **Descarga el artefacto** generado en el job `build`.
+2. **Autentica con Azure** usando `azure/login@v2` con las credenciales del Service Principal almacenadas en el secret `AZURE_CREDENTIALS` del ambiente correspondiente.
+3. **Despliega a Azure Functions** con `azure/functions-action@v1`. El parámetro `scm-do-build-during-deployment: false` indica que los paquetes ya están instalados en `.python_packages/` y no es necesario que el servidor los reinstale (despliegue más rápido y predecible).
+
+Los ambientes `staging` y `production` tienen **protection rules** en GitHub que exigen aprobación manual antes de ejecutar el deploy.
+
+---
+
+### Configuración inicial en GitHub
+
+Sigue estos pasos una sola vez para dejar el pipeline funcional.
+
+#### Paso 1 — Crear el Service Principal en Azure
+
+Por cada ambiente, crea un Service Principal con permisos sobre el Resource Group donde vive la Function App:
+
+```bash
+az ad sp create-for-rbac \
+  --name "github-actions-<proyecto>-<ambiente>" \
+  --role contributor \
+  --scopes /subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RESOURCE_GROUP> \
+  --json-auth
+```
+
+Guarda el JSON completo que devuelve el comando — ese es el valor de `AZURE_CREDENTIALS`.
+
+> Crea un Service Principal separado por ambiente para seguir el principio de mínimo privilegio. El de `dev` solo tiene acceso al RG de dev, el de `prod` solo al de producción.
+
+#### Paso 2 — Crear los Environments en GitHub
+
+En el repositorio, ve a **Settings → Environments** y crea tres environments:
+
+| Environment | Protection rules |
 |---|---|
-| `lint` | Ejecuta `flake8` sobre `src/` y `function_app.py` |
-| `test` | Ejecuta `pytest` con reporte de cobertura (mínimo 80%) |
-| `deploy-dev` | Deploy automático a Azure al hacer push a `develop` |
-| `deploy-prod` | Deploy manual a Azure al hacer push a `main` |
+| `dev` | Ninguna — el deploy es automático |
+| `staging` | Activar **Required reviewers** y agregar al menos un aprobador |
+| `production` | Activar **Required reviewers** y agregar al menos un aprobador |
 
-Para el deploy, configurar las variables de CI/CD `AZURE_FUNCTION_APP_NAME_DEV` y `AZURE_FUNCTION_APP_NAME_PROD` en GitLab.
+#### Paso 3 — Agregar Secrets en cada Environment
+
+Dentro de cada environment, agrega estos dos secrets:
+
+| Secret | Valor |
+|---|---|
+| `AZURE_CREDENTIALS` | JSON completo del `az ad sp create-for-rbac` del ambiente correspondiente |
+| `AZURE_FUNCTIONAPP_NAME` | Nombre de la Function App en Azure para ese ambiente (ej. `func-agrosuper-dev`) |
+
+> Los secrets se configuran **por environment**, no a nivel de repositorio, para que las credenciales de producción nunca sean accesibles desde un job de dev.
+
+#### Paso 4 — Verificar el primer despliegue
+
+1. Crea una rama desde `develop`, haz un cambio y abre un PR → el pipeline `ci.yml` debe ejecutarse y pasar.
+2. Haz merge del PR a `develop` → el pipeline `cd.yml` debe ejecutarse y desplegar a dev automáticamente.
+3. Para staging y producción, el pipeline quedará en estado **"Waiting"** hasta que un aprobador autorice el deploy desde la UI de GitHub Actions.
