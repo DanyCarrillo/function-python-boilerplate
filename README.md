@@ -353,10 +353,23 @@ Dentro de cada environment, agrega estos dos secrets:
 
 | Secret | Valor |
 |---|---|
-| `AZURE_CREDENTIALS` | JSON completo del `az ad sp create-for-rbac` del ambiente correspondiente |
-| `AZURE_FUNCTIONAPP_NAME` | Nombre de la Function App en Azure para ese ambiente (ej. `func-agrosuper-dev`) |
+| `AZURE_CREDENTIALS` | JSON completo del `az ad sp create-for-rbac` del ambiente correspondiente.|
+| `AZURE_FUNCTIONAPP_NAME` | Nombre de la Function App en Azure para ese ambiente (ej. `func-boilerplate-dev`) |
+
+ 
+```bash
+Ejemplo de JSON para AZURE_CREDENTIALS:
+
+{
+  "clientId": "...",
+  "clientSecret": "...",
+  "subscriptionId": "...",
+  "tenantId": "..."
+}
+```
 
 > Los secrets se configuran **por environment**, no a nivel de repositorio, para que las credenciales de producción nunca sean accesibles desde un job de dev.
+
 
 #### Paso 4 — Verificar el primer despliegue
 
