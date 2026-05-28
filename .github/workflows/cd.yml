@@ -68,26 +68,31 @@ jobs:
         run: |
           pip install --target=".python_packages/lib/site-packages" \
             -r requirements.txt
-          # The Azure Functions host has its own azure/__init__.py that makes Python
-          # treat `azure` as a regular package, hiding our namespace subpackages.
-          # This file ensures our copy wins (it comes first in sys.path) and uses
-          # pkgutil.extend_path to merge all azure.* directories from sys.path.
+          # Fix azure namespace: the host's azure/__init__.py would hide our
+          # azure.ai.* packages. Our copy (first in sys.path) uses extend_path
+          # to merge all azure.* namespace dirs.
           printf '__path__ = __import__("pkgutil").extend_path(__path__, __name__)\n' \
             > .python_packages/lib/site-packages/azure/__init__.py
+
+      - name: Create deployment zip
+        # azure/functions-action uses glob(**/*) internally which EXCLUDES hidden
+        # directories like .python_packages. We pre-create the zip with `zip -r`
+        # which includes hidden dirs, then deploy the zip directly.
+        run: |
+          zip -r function-app.zip . \
+            -x "./.git/*" \
+            -x "./.venv/*" \
+            -x "./htmlcov/*" \
+            -x "./tests/*" \
+            -x "*/__pycache__/*" \
+            -x "*.pyc" \
+            -x "./function-app.zip"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: function-app
-          path: |
-            .
-            .python_packages/**
-            !.venv/
-            !.git/
-            !htmlcov/
-            !tests/
-            !**/__pycache__/
-            !*.pyc
+          path: function-app.zip
           retention-days: 1
 
   # ── Deploy: Development ───────────────────────────────────────────────────────
@@ -112,7 +117,7 @@ jobs:
         uses: azure/functions-action@v1
         with:
           app-name: ${{ secrets.AZURE_FUNCTIONAPP_NAME }}
-          package: .
+          package: function-app.zip
           scm-do-build-during-deployment: false
 
   # ── Deploy: Staging ───────────────────────────────────────────────────────────
@@ -137,7 +142,7 @@ jobs:
         uses: azure/functions-action@v1
         with:
           app-name: ${{ secrets.AZURE_FUNCTIONAPP_NAME }}
-          package: .
+          package: function-app.zip
           scm-do-build-during-deployment: false
 
   # ── Deploy: Production ────────────────────────────────────────────────────────
@@ -162,5 +167,5 @@ jobs:
         uses: azure/functions-action@v1
         with:
           app-name: ${{ secrets.AZURE_FUNCTIONAPP_NAME }}
-          package: .
+          package: function-app.zip
           scm-do-build-during-deployment: false
