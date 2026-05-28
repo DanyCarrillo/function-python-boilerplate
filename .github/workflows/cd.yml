@@ -68,6 +68,12 @@ jobs:
         run: |
           pip install --target=".python_packages/lib/site-packages" \
             -r requirements.txt
+          # The Azure Functions host ships its own azure/__init__.py which causes Python
+          # to treat `azure` as a regular package (ignoring our namespace subpackages).
+          # Adding extend_path here ensures our copy takes precedence and properly
+          # merges all azure.* namespace directories from sys.path.
+          printf '__path__ = __import__("pkgutil").extend_path(__path__, __name__)\n' \
+            > .python_packages/lib/site-packages/azure/__init__.py
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
