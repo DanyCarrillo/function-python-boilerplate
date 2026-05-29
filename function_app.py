@@ -1,6 +1,5 @@
 import json
 import logging
-
 import azure.functions as func
 
 from src.infrastructure.config import Config
@@ -14,6 +13,7 @@ _container = Container(_config)
 
 @app.route(route="boilerplate", methods=["GET", "POST"])
 def boilerplate_function(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info("[boilerplate_function] Test ci-cd")
     logging.info("[boilerplate_function] HTTP trigger received.")
     try:
         body = req.get_json()
