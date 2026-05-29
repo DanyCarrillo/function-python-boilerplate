@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import azure.functions as func
 
 from src.infrastructure.config import Config
